@@ -1,0 +1,6 @@
+config.json
+*.log
+node_modules/
+artifacts/
+.codex/
+.claude/

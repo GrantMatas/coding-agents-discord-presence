@@ -1,0 +1,13 @@
+{
+  "name": "coding-agents-discord-presence",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Windows Discord Rich Presence for Codex and Claude Code",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
