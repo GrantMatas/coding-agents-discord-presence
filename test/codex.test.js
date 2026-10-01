@@ -39,7 +39,9 @@ test('reports phase, model, elapsed start, token counts, and stays visible when 
 
   await fs.promises.appendFile(file, event('event_msg', { type: 'task_complete' }));
   assert.deepEqual(await reader.poll(), []);
-  assert.deepEqual(activityFor([]).timestamps, undefined);
+  const idleTimer = activityFor([]).timestamps;
+  assert.equal(idleTimer.start, idleTimer.end);
+  assert.deepEqual(activityFor([]).timestamps, idleTimer);
   assert.equal(activityFor([]).details, 'Idle');
   assert.equal(activityFor([]).state, '0 tok · $0.00 est. · 0m');
   assert.equal(activityFor([], undefined, { visibilityMode: 'active' }), null);

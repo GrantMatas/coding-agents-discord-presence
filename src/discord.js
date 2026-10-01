@@ -9,6 +9,7 @@ class DiscordRpc {
     this.ready = null;
     this.readyResolve = null;
     this.readyReject = null;
+    this.runningTimer = false;
   }
 
   get connected() { return Boolean(this.socket && !this.socket.destroyed && this.ready === true); }
@@ -98,6 +99,14 @@ class DiscordRpc {
 
   async setActivity(activity) {
     await this.connect();
+    const runningTimer = Boolean(activity?.timestamps?.start && !activity.timestamps.end);
+    if (activity && !runningTimer && this.runningTimer) await this.setActivity(null);
+    const result = await this.sendActivity(activity);
+    this.runningTimer = runningTimer;
+    return result;
+  }
+
+  async sendActivity(activity) {
     const nonce = require('node:crypto').randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

@@ -1,5 +1,7 @@
 const DEFAULT_ICON_URL = 'https://raw.githubusercontent.com/backnotprop/orchestrator/main/assets/providers/codex-icon-dark.png';
 const { estimateCost, formatCost, modelLabel } = require('./pricing');
+// A completed interval stays at zero; omitting timestamps lets Discord show app runtime.
+const IDLE_TIMESTAMP = Math.floor(Date.now() / 1000);
 
 function compact(value) {
   if (value < 1000) return String(value);
@@ -31,7 +33,8 @@ function activityFor(tasks, imageAsset = DEFAULT_ICON_URL, config = {}) {
     status_display_type: 1,
     details: task ? limit(`${model} · ${task.stage}`) : 'Idle',
     state: limit(state),
-    timestamps: task?.startedAt ? { start: Math.floor(task.startedAt / 1000) } : undefined,
+    timestamps: task?.startedAt ? { start: Math.floor(task.startedAt / 1000) }
+      : task ? undefined : { start: IDLE_TIMESTAMP, end: IDLE_TIMESTAMP },
     assets: imageAsset ? {
       large_image: imageAsset,
       large_text: task?.usage ? limit(`${task.tokenLabel || 'Thread tokens'} · ${compact(task.usage.cachedInput || 0)} cached · Standard API cost estimate`) : provider

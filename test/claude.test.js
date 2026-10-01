@@ -31,7 +31,7 @@ test('Claude hooks detect tools, count unique messages, and stop the timer on co
   assert.equal(tasks[0].totalTokens, 380);
   recordClaudeEvent(folder, event('Stop'), now + 4);
   assert.deepEqual(await reader.poll(), []);
-  assert.equal(activityFor([]).timestamps, undefined);
+  assert.equal(activityFor([]).timestamps.start, activityFor([]).timestamps.end);
   recordClaudeEvent(folder, event('UserPromptSubmit'), now - 11 * 60 * 1000);
   assert.deepEqual(await reader.poll(), []);
 });

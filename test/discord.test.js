@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const net = require('node:net');
 const crypto = require('node:crypto');
 const { DiscordRpc } = require('../src/discord');
+const { activityFor } = require('../src/presence');
 
 function frame(opcode, value) {
   const body = Buffer.from(JSON.stringify(value));
@@ -37,7 +38,12 @@ test('handshakes, publishes an activity, and clears it', async t => {
   const rpc = new DiscordRpc('123456789012345678');
   t.after(() => { rpc.close(); server.close(); });
   await rpc.connectPipe(pipe);
-  await rpc.setActivity({ details: 'Thinking with Codex' });
+  const active = activityFor([{ provider: 'Codex', model: 'gpt-6.1-sol', stage: 'Thinking', startedAt: Date.now() - 120000 }]);
+  const idle = activityFor([]);
+  await rpc.setActivity(active);
+  await rpc.setActivity(idle);
+  await rpc.setActivity(idle);
   await rpc.setActivity(null);
-  assert.deepEqual(seen, [{ details: 'Thinking with Codex' }, null]);
+  assert.deepEqual(seen, [active, null, idle, idle, null]);
+  assert.equal(seen[2].timestamps.start, seen[2].timestamps.end);
 });
