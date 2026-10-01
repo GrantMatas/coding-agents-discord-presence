@@ -32,8 +32,8 @@ test('reports phase, model, elapsed start, token counts, and stays visible when 
   assert.equal(tasks[0].startedAt, now - 30000);
   const activity = activityFor(tasks);
   assert.equal(activity.status_display_type, 1);
-  assert.equal(activity.details, 'Researching');
-  assert.match(activity.state, /Codex · gpt-6-sol · 1.2K in · 82 out/);
+  assert.equal(activity.details, 'GPT-6 Sol · Researching');
+  assert.match(activity.state, /1.3K tok · ~\$0.003 est./);
   assert.equal(activity.timestamps.start, Math.floor((now - 30000) / 1000));
   assert.match(activity.assets.large_image, /codex-icon-dark\.png$/);
 
@@ -41,7 +41,7 @@ test('reports phase, model, elapsed start, token counts, and stays visible when 
   assert.deepEqual(await reader.poll(), []);
   assert.deepEqual(activityFor([]).timestamps, undefined);
   assert.equal(activityFor([]).details, 'Idle');
-  assert.equal(activityFor([]).state, 'Idle · 0 tokens · 0m');
+  assert.equal(activityFor([]).state, '0 tok · $0.00 est. · 0m');
   assert.equal(activityFor([], undefined, { visibilityMode: 'active' }), null);
 });
 
@@ -79,7 +79,44 @@ test('uses live Codex database turns and detects when a turn completes', async t
   assert.equal(tasks.length, 1);
   assert.equal(tasks[0].stage, 'Researching');
   assert.equal(tasks[0].totalTokens, 23000);
-  assert.match(activityFor(tasks).state, /23K thread tokens/);
+  assert.match(activityFor(tasks).state, /23K tok · Cost unavailable/);
   history.prepare('UPDATE thread_turns SET status = ? WHERE turn_id = ?').run('completed', 'turn');
+  assert.deepEqual(await reader.poll(), []);
+});
+
+test('CLI token_count logs coexist with desktop databases and deduplicate shared threads', async t => {
+  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-cli-presence-'));
+  const now = Date.now();
+  const state = new DatabaseSync(path.join(home, 'state_5.sqlite'));
+  const history = new DatabaseSync(path.join(home, 'thread_history_1.sqlite'));
+  t.after(async () => { state.close(); history.close(); await fs.promises.rm(home, { recursive: true, force: true }); });
+  state.exec('CREATE TABLE threads (id TEXT, model TEXT, tokens_used INTEGER, updated_at_ms INTEGER, originator TEXT, rollout_path TEXT, reasoning_effort TEXT, source TEXT)');
+  history.exec('CREATE TABLE thread_turns (thread_id TEXT, turn_id TEXT, status TEXT, started_at INTEGER)');
+  history.exec('CREATE TABLE thread_items (thread_id TEXT, turn_id TEXT, item_id TEXT, item_type TEXT, item_json TEXT, started_at_ms INTEGER, created_at_ms INTEGER)');
+  const date = new Date(now);
+  const folder = path.join(home, 'sessions', String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+  await fs.promises.mkdir(folder, { recursive: true });
+  const event = (type, payload) => JSON.stringify({ timestamp: date.toISOString(), type, payload }) + '\n';
+  const file = path.join(folder, 'rollout-cli.jsonl');
+  await fs.promises.writeFile(file, event('session_meta', { id: 'cli', source: 'cli' }) +
+    event('event_msg', { type: 'task_started' }) + event('turn_context', { model: 'gpt-6.1-sol', effort: 'high' }) +
+    event('response_item', { type: 'function_call', name: 'spawn_agent' }) +
+    event('event_msg', { type: 'token_count', info: { total_token_usage: {
+      input_tokens: 1000000, cached_input_tokens: 800000, output_tokens: 100000, total_tokens: 1100000 } } }));
+  const reader = new CodexReader(home, { now: () => now });
+  let tasks = await reader.poll(); // Databases exist, but do not contain the CLI turn.
+  assert.equal(tasks.length, 1);
+  assert.equal(activityFor(tasks).name, 'Codex CLI');
+  assert.equal(activityFor(tasks).details, 'GPT-6.1 Sol (High) · Using agents');
+  assert.equal(activityFor(tasks).state, '1.1M tok · ~$1.48 est.');
+  state.prepare('INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('cli', 'gpt-6.1-sol', 1100000, now, 'codex_cli_rs', file, 'high', 'cli');
+  history.prepare('INSERT INTO thread_turns VALUES (?, ?, ?, ?)').run('cli', 'turn', 'inProgress', Math.floor(now / 1000));
+  history.prepare('INSERT INTO thread_items VALUES (?, ?, ?, ?, ?, ?, ?)').run('cli', 'turn', 'agent', 'collabAgentToolCall', '{}', now, now);
+  await fs.promises.utimes(file, new Date(now - 11 * 60 * 1000), new Date(now - 11 * 60 * 1000));
+  tasks = await new CodexReader(home, { now: () => now }).poll(); // Active DB turn overrides old rollout mtime.
+  assert.equal(tasks.length, 1);
+  assert.equal(activityFor(tasks).state, '1.1M tok · ~$1.48 est.');
+  history.exec("UPDATE thread_turns SET status = 'completed'");
+  await fs.promises.appendFile(file, event('event_msg', { type: 'task_complete' }));
   assert.deepEqual(await reader.poll(), []);
 });

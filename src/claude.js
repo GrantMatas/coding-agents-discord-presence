@@ -67,7 +67,7 @@ class ClaudeReader {
       const usage = await this.readUsage(state.transcriptPath);
       tasks.push({ provider: 'Claude Code', stage: state.stage || 'Working', model: usage.model || state.model || 'Claude Code',
         startedAt: state.startedAt, updatedAt: state.updatedAt, totalTokens: usage.totalTokens,
-        totalTokensAvailable: usage.available, tokenLabel: 'session tokens' });
+        totalTokensAvailable: usage.available, tokenLabel: 'session tokens', usage: usage.breakdown });
     }
     return tasks.sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -96,6 +96,8 @@ class ClaudeReader {
               const previous = entry.messages.get(message.id) || {};
               for (const key of ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'])
                 previous[key] = Math.max(previous[key] || 0, Number(message.usage[key]) || 0);
+              previous.cacheWrite1h = Math.max(previous.cacheWrite1h || 0,
+                Number(message.usage.cache_creation?.ephemeral_1h_input_tokens) || 0);
               entry.messages.set(message.id, previous);
             }
           } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
@@ -105,8 +107,17 @@ class ClaudeReader {
       }
       entry.offset = stat.size;
     }
+    const breakdown = { input: 0, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0 };
+    for (const usage of entry.messages.values()) {
+      breakdown.input += usage.input_tokens;
+      breakdown.cachedInput += usage.cache_read_input_tokens;
+      breakdown.output += usage.output_tokens;
+      breakdown.cacheWrite1h += usage.cacheWrite1h;
+      breakdown.cacheWrite += Math.max(0, usage.cache_creation_input_tokens - usage.cacheWrite1h);
+    }
     return { model: entry.model, available: entry.messages.size > 0,
-      totalTokens: [...entry.messages.values()].reduce((total, usage) => total + Object.values(usage).reduce((a, b) => a + b, 0), 0) };
+      totalTokens: Object.values(breakdown).reduce((a, b) => a + b, 0),
+      breakdown: entry.messages.size ? breakdown : null };
   }
 }
 

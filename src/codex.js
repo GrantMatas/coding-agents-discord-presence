@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { codexUsage } = require('./pricing');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MS = 10 * 60 * 1000;
@@ -10,6 +11,7 @@ function dateFolder(date) {
 }
 
 function stageForTool(name) {
+  if (/spawn_agent|send_message|wait_agent|collab|delegate|subagent|^(agent|task)$/i.test(name)) return 'Using agents';
   if (/web|search|browser|fetch/i.test(name)) return 'Researching';
   if (/image|visual|render/i.test(name)) return 'Creating visuals';
   if (/exec|patch|file|git|command|terminal|bash|powershell|edit|write|read|glob|grep/i.test(name)) return 'Coding';
@@ -26,10 +28,13 @@ function applyEvent(state, event) {
   const when = Date.parse(event.timestamp) || Date.now();
   if (event.type === 'session_meta') {
     state.originator = payload.originator || '';
+    state.sessionId = payload.id || payload.session_id;
+    state.source = typeof payload.source === 'string' ? payload.source : '';
     return;
   }
   if (event.type === 'turn_context') {
     if (typeof payload.model === 'string') state.model = payload.model;
+    state.effort = payload.effort || state.effort;
     return;
   }
   if (event.type === 'event_msg') {
@@ -37,13 +42,16 @@ function applyEvent(state, event) {
       state.active = true;
       state.startedAt = Date.parse(payload.started_at) || when;
       state.stage = 'Thinking';
-      state.model = 'Codex';
       state.tokens = null;
-    } else if (payload.type === 'task_complete') {
+    } else if (['task_complete', 'turn_aborted', 'task_aborted'].includes(payload.type)) {
       state.active = false;
+    } else if (payload.type === 'token_count' && payload.info?.total_token_usage) {
+      state.threadTokens = payload.info.total_token_usage;
+      state.tokens = payload.info.last_token_usage;
     }
   } else if (event.type === 'token_usage_record' && payload.turn_token_usage) {
     state.tokens = payload.turn_token_usage;
+    if (payload.thread_token_usage) state.threadTokens = payload.thread_token_usage;
   } else if (event.type === 'response_item' && state.active) {
     if (payload.type === 'reasoning') state.stage = 'Thinking';
     else if (payload.type === 'custom_tool_call' || payload.type === 'function_call')
@@ -61,9 +69,16 @@ class CodexReader {
   }
 
   async poll() {
-    const databaseTasks = this.pollDatabase();
-    if (databaseTasks !== null) return databaseTasks;
-    return this.pollRollouts();
+    const databaseTasks = this.pollDatabase() || [];
+    const rollouts = await this.pollRollouts(databaseTasks);
+    const enriched = databaseTasks.map(task => {
+      const state = this.files.get(task.rolloutPath)?.state;
+      const usage = codexUsage(state?.threadTokens);
+      return { ...task, usage, effort: state?.effort || task.effort };
+    });
+    return [...enriched, ...rollouts.filter(task => !databaseTasks.some(db =>
+      db.sessionId === task.sessionId || (db.rolloutPath && db.rolloutPath === task.rolloutPath)))]
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   pollDatabase() {
@@ -76,7 +91,9 @@ class CodexReader {
       stateDb = new DatabaseSync(statePath, { readOnly: true });
       historyDb = new DatabaseSync(historyPath, { readOnly: true });
       const turns = historyDb.prepare("SELECT thread_id, turn_id, started_at FROM thread_turns WHERE status = 'inProgress' ORDER BY started_at DESC LIMIT 16").all();
-      const threadQuery = stateDb.prepare('SELECT model, tokens_used, updated_at_ms, originator FROM threads WHERE id = ?');
+      const columns = new Set(stateDb.prepare('PRAGMA table_info(threads)').all().map(column => column.name));
+      const optional = ['rollout_path', 'reasoning_effort', 'source'].filter(column => columns.has(column));
+      const threadQuery = stateDb.prepare(`SELECT model, tokens_used, updated_at_ms, originator${optional.map(column => ', ' + column).join('')} FROM threads WHERE id = ?`);
       const itemQuery = historyDb.prepare('SELECT item_id, item_type FROM thread_items WHERE thread_id = ? AND turn_id = ? ORDER BY COALESCE(started_at_ms, created_at_ms) DESC LIMIT 1');
       const jsonQuery = historyDb.prepare('SELECT item_json FROM thread_items WHERE item_id = ? LIMIT 1');
       const now = this.now();
@@ -89,6 +106,8 @@ class CodexReader {
         switch (item?.item_type) {
           case 'reasoning': stage = 'Thinking'; break;
           case 'webSearch': stage = 'Researching'; break;
+          case 'subAgentActivity':
+          case 'collabAgentToolCall': stage = 'Using agents'; break;
           case 'commandExecution':
           case 'fileChange': stage = 'Coding'; break;
           case 'imageGeneration': stage = 'Creating visuals'; break;
@@ -102,6 +121,10 @@ class CodexReader {
           }
         }
         tasks.push({
+          sessionId: turn.thread_id,
+          rolloutPath: thread.rollout_path,
+          effort: thread.reasoning_effort,
+          displayName: /cli|exec/i.test(thread.source || thread.originator || '') ? 'Codex CLI' : 'Codex App',
           model: thread.model || 'Codex',
           stage,
           startedAt: Number(turn.started_at) * 1000,
@@ -125,9 +148,10 @@ class CodexReader {
     }
   }
 
-  async pollRollouts() {
+  async pollRollouts(databaseTasks = []) {
     const now = this.now();
-    const candidates = [];
+    const databaseFiles = new Set(databaseTasks.map(task => task.rolloutPath).filter(Boolean));
+    const candidates = new Set(databaseFiles);
     for (let daysAgo = 0; daysAgo < 2; daysAgo++) {
       const folder = path.join(this.home, 'sessions', ...dateFolder(new Date(now - daysAgo * DAY_MS)));
       let names;
@@ -135,7 +159,7 @@ class CodexReader {
         if (error.code === 'ENOENT') continue;
         throw error;
       }
-      for (const name of names) if (name.startsWith('rollout-') && name.endsWith('.jsonl')) candidates.push(path.join(folder, name));
+      for (const name of names) if (name.startsWith('rollout-') && name.endsWith('.jsonl')) candidates.add(path.join(folder, name));
     }
     for (const file of candidates) {
       let stat;
@@ -143,7 +167,7 @@ class CodexReader {
         if (error.code === 'ENOENT') continue;
         throw error;
       }
-      if (now - stat.mtimeMs > STALE_MS && !this.files.has(file)) continue;
+      if (now - stat.mtimeMs > STALE_MS && !this.files.has(file) && !databaseFiles.has(file)) continue;
       let entry = this.files.get(file);
       if (!entry || stat.size < entry.offset) {
         entry = { offset: 0, remainder: Buffer.alloc(0), state: { file, active: false, stage: 'Working', model: 'Codex', tokens: null, lastEventAt: 0, startedAt: 0 } };
@@ -153,12 +177,21 @@ class CodexReader {
       entry.mtimeMs = stat.mtimeMs;
     }
     for (const [file, entry] of this.files) {
-      if (now - (entry.mtimeMs || 0) > STALE_MS || !candidates.includes(file)) this.files.delete(file);
+      if ((now - (entry.mtimeMs || 0) > STALE_MS && !databaseFiles.has(file)) || !candidates.has(file)) this.files.delete(file);
     }
     const active = [...this.files.values()].map(entry => entry.state)
       .filter(state => state.active && state.startedAt && now - state.lastEventAt <= STALE_MS)
       .sort((a, b) => b.lastEventAt - a.lastEventAt);
     return active.map(state => ({
+      sessionId: state.sessionId || state.file,
+      rolloutPath: state.file,
+      effort: state.effort,
+      displayName: /cli|exec/i.test(state.source || state.originator || '') ? 'Codex CLI' : 'Codex App',
+      updatedAt: state.lastEventAt,
+      usage: codexUsage(state.threadTokens || state.tokens),
+      totalTokens: safeNumber((state.threadTokens || state.tokens)?.total_tokens ??
+        ((state.threadTokens || state.tokens)?.input_tokens + (state.threadTokens || state.tokens)?.output_tokens)),
+      totalTokensAvailable: Boolean(state.threadTokens || state.tokens),
       model: state.model,
       stage: state.stage,
       startedAt: state.startedAt,

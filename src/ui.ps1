@@ -63,19 +63,19 @@ function Show-Settings {
   $form.Controls.Add($visibility)
 
   $codex = New-Object System.Windows.Forms.CheckBox
-  $codex.Text = 'Codex'
+  $codex.Text = 'Codex App + CLI'
   $codex.Location = New-Object System.Drawing.Point(18, 218)
   $codex.AutoSize = $true
   $codex.Checked = $true
   $form.Controls.Add($codex)
   $claude = New-Object System.Windows.Forms.CheckBox
   $claude.Text = 'Claude Code (installs local hooks)'
-  $claude.Location = New-Object System.Drawing.Point(136, 218)
+  $claude.Location = New-Object System.Drawing.Point(152, 218)
   $claude.AutoSize = $true
   $claude.Checked = $true
   $form.Controls.Add($claude)
   $hint = New-Object System.Windows.Forms.Label
-  $hint.Text = 'Active tasks show the model, tokens and elapsed time. Idle shows 0m. Restart Claude Code after enabling its hooks.'
+  $hint.Text = 'Shows model, activity, tokens, estimated API cost and task time. Idle shows 0m. Restart Claude Code after enabling hooks.'
   $hint.Location = New-Object System.Drawing.Point(18, 246)
   $hint.Size = New-Object System.Drawing.Size(400, 36)
   $form.Controls.Add($hint)

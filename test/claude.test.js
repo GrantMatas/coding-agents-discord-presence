@@ -24,7 +24,8 @@ test('Claude hooks detect tools, count unique messages, and stop the timer on co
   assert.equal(tasks[0].stage, 'Researching');
   assert.equal(tasks[0].totalTokens, 185);
   assert.equal(tasks[0].startedAt, now + 1);
-  assert.match(activityFor(tasks).state, /Claude Code · claude-sonnet-4-6 · 185 session tokens/);
+  assert.equal(activityFor(tasks).details, 'Claude Sonnet 4.6 · Researching');
+  assert.match(activityFor(tasks).state, /185 tok · <\$0.001 est./);
   await fs.promises.appendFile(transcript, message('two', 20));
   tasks = await reader.poll();
   assert.equal(tasks[0].totalTokens, 380);

@@ -6,7 +6,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { AgentReader } = require('./agents');
 const { recordClaudeEvent, installClaudeHooks } = require('./claude');
 const { DiscordRpc } = require('./discord');
-const { activityFor, compact, DEFAULT_ICON_URL } = require('./presence');
+const { activityFor, DEFAULT_ICON_URL } = require('./presence');
 
 const configDir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'CodexDiscordPresence');
 const configPath = path.join(configDir, 'config.json');
@@ -156,8 +156,8 @@ function run(lock, initialConfig) {
         lastKey = activity ? key : null;
       }
       const task = tasks[0];
-      const tokens = task ? (task.totalTokensAvailable ? compact(task.totalTokens) + ' tokens' : 'tokens pending') : '';
-      const message = task ? task.provider + ' · ' + task.stage + ' · ' + task.model + ' · ' + tokens : 'Idle · 0 tokens · 0m';
+      const preview = activity || activityFor([], activityImage);
+      const message = (task ? task.displayName || task.provider : 'Idle') + ' · ' + preview.details + ' · ' + preview.state;
       writeStatus(claudeSetupError ? message + ' · ' + claudeSetupError : message);
       lastError = '';
     } catch (error) {

@@ -4,7 +4,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'artifacts', 'codex-presence.bundle.js');
 fs.mkdirSync(path.dirname(output), { recursive: true });
-const names = ['codex', 'claude', 'agents', 'discord', 'presence', 'main'];
+const names = ['pricing', 'codex', 'claude', 'agents', 'discord', 'presence', 'main'];
 const uiScript = fs.readFileSync(path.join(root, 'src', 'ui.ps1'), 'utf8');
 const trayIcon = fs.readFileSync(path.join(root, 'src', 'codex.ico')).toString('base64');
 const factories = names.map(name => {

@@ -1,4 +1,5 @@
 const DEFAULT_ICON_URL = 'https://raw.githubusercontent.com/backnotprop/orchestrator/main/assets/providers/codex-icon-dark.png';
+const { estimateCost, formatCost, modelLabel } = require('./pricing');
 
 function compact(value) {
   if (value < 1000) return String(value);
@@ -15,25 +16,25 @@ function activityFor(tasks, imageAsset = DEFAULT_ICON_URL, config = {}) {
   if (!tasks.length && config.visibilityMode === 'active') return null;
   const task = tasks[0];
   const provider = task?.provider || 'Codex';
-  const model = task?.model || provider;
+  const model = modelLabel(task?.model || provider, task?.effort);
   const tokens = task?.totalTokensAvailable
-    ? `${compact(task.totalTokens)} ${task.tokenLabel || 'thread tokens'}`
+    ? `${compact(task.totalTokens)} tok`
     : task?.tokensAvailable
       ? `${compact(task.inputTokens)} in · ${compact(task.outputTokens)} out`
       : task ? 'Tokens pending' : '0 tokens';
   const state = task
-    ? `${provider} · ${model} · ${tokens}${tasks.length > 1 ? ` · ${tasks.length} tasks` : ''}`
-    : 'Idle · 0 tokens · 0m';
+    ? `${tokens} · ${formatCost(estimateCost(task, config.pricing))}${tasks.length > 1 ? ` · ${tasks.length} tasks` : ''}`
+    : '0 tok · $0.00 est. · 0m';
   return {
-    name: task?.provider || 'Coding Agents',
+    name: task?.displayName || task?.provider || 'Coding Agents',
     type: 0,
     status_display_type: 1,
-    details: task?.stage || 'Idle',
+    details: task ? limit(`${model} · ${task.stage}`) : 'Idle',
     state: limit(state),
     timestamps: task?.startedAt ? { start: Math.floor(task.startedAt / 1000) } : undefined,
     assets: imageAsset ? {
       large_image: imageAsset,
-      large_text: task?.cachedInputTokens ? limit(`${model} · ${compact(task.cachedInputTokens)} cached input tokens`) : provider
+      large_text: task?.usage ? limit(`${task.tokenLabel || 'Thread tokens'} · ${compact(task.usage.cachedInput || 0)} cached · Standard API cost estimate`) : provider
     } : undefined,
     instance: false
   };
